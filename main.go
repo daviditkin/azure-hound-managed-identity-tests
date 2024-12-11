@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"github.com/bloodhoundad/azurehound/v2/client/config"
+	"test-managed-identity/client/config"
 	foo "github.com/bloodhoundad/azurehound/v2/config"
 	"github.com/bloodhoundad/azurehound/v2/logger"
 	"github.com/go-logr/logr"
@@ -25,8 +25,10 @@ func main() {
 	foo.JsonLogs.Set(true)
 	setupLogger()
 	log.Info("starting azurehound service...")
+	// "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fvault.azure.net"
+	// ManagedIdentity: "",
 	c := config.Config{
-		ClientSecret: "mysupersecret",
+		// Put stuff here
 	}
 	client, err := rest.NewRestClient("https://graph.microsoft.com", c)
 	if err != nil {
@@ -36,8 +38,4 @@ func main() {
 	if err != nil {
 		log.Error(err, "failed to get foo")
 	}
-
 }
-
-//TIP See GoLand help at <a href="https://www.jetbrains.com/help/go/">jetbrains.com/help/go/</a>.
-// Also, you can try interactive lessons for GoLand by selecting 'Help | Learn IDE Features' from the main menu.

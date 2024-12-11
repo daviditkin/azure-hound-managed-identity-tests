@@ -20,10 +20,8 @@ package rest
 import (
 	"net/http"
 	"net/http/httptest"
-
 	"testing"
-
-	"github.com/bloodhoundad/azurehound/v2/client/config"
+	"test-managed-identity/client/config"
 )
 
 func TestClosedConnection(t *testing.T) {

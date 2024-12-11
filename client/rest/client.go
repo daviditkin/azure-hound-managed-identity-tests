@@ -22,18 +22,14 @@ package rest
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
-	"sync"
 	"time"
-
-	"github.com/bloodhoundad/azurehound/v2/client/config"
+	"test-managed-identity/client/config"
 	"github.com/bloodhoundad/azurehound/v2/client/query"
-	"github.com/bloodhoundad/azurehound/v2/constants"
 )
 
 type RestClient interface {
@@ -48,6 +44,8 @@ type RestClient interface {
 }
 
 func NewRestClient(apiUrl string, config config.Config) (RestClient, error) {
+	var authenticator AuthClient
+
 	if auth, err := url.Parse(config.AuthorityUrl()); err != nil {
 		return nil, err
 	} else if api, err := url.Parse(apiUrl); err != nil {
@@ -55,24 +53,20 @@ func NewRestClient(apiUrl string, config config.Config) (RestClient, error) {
 	} else if http, err := NewHTTPClient(config.ProxyUrl); err != nil {
 		return nil, err
 	} else {
+		// TODO make one NewAuthClient function
+		if config.ManagedIdentity {
+			authenticator = NewManagedIdentityAuthClient(config, auth, api, http)
+		} else {
+			authenticator = NewGenericAuthClient(config, auth, api)
+		}
 		client := &restClient{
 			*api,
-			*auth,
-			config.JWT,
-			config.ApplicationId,
-			config.ClientSecret,
-			config.ClientCert,
-			config.ClientKey,
-			config.ClientKeyPass,
-			config.Username,
-			config.Password,
 			http,
-			sync.RWMutex{},
-			config.RefreshToken,
 			config.Tenant,
 			Token{},
 			config.SubscriptionId,
 			config.MgmtGroupId,
+			authenticator,
 		}
 		return client, nil
 	}
@@ -80,82 +74,16 @@ func NewRestClient(apiUrl string, config config.Config) (RestClient, error) {
 
 type restClient struct {
 	api           url.URL
-	authUrl       url.URL
-	jwt           string
-	clientId      string
-	clientSecret  string
-	clientCert    string
-	clientKey     string
-	clientKeyPass string
-	username      string
-	password      string
 	http          *http.Client
-	mutex         sync.RWMutex
-	refreshToken  string
 	tenant        string
 	token         Token
 	subId         []string
 	mgmtGroupId   []string
+	AuthClient	  AuthClient
 }
 
 func (s *restClient) Authenticate() error {
-	var (
-		path         = url.URL{Path: fmt.Sprintf("/%s/oauth2/v2.0/token", s.tenant)}
-		endpoint     = s.authUrl.ResolveReference(&path)
-		defaultScope = url.URL{Path: "/.default"}
-		scope        = s.api.ResolveReference(&defaultScope)
-		body         = url.Values{}
-	)
-
-	if s.managedIdentity == true {
-
-	}
-	if s.clientId == "" {
-		body.Add("client_id", constants.AzPowerShellClientID)
-	} else {
-		body.Add("client_id", s.clientId)
-	}
-
-	body.Add("scope", scope.ResolveReference(&defaultScope).String())
-
-	if s.refreshToken != "" {
-		body.Add("grant_type", "refresh_token")
-		body.Add("refresh_token", s.refreshToken)
-		body.Set("client_id", constants.AzPowerShellClientID)
-	} else if s.clientSecret != "" {
-		body.Add("grant_type", "client_credentials")
-		body.Add("client_secret", s.clientSecret)
-	} else if s.clientCert != "" && s.clientKey != "" {
-		if clientAssertion, err := NewClientAssertion(endpoint.String(), s.clientId, s.clientCert, s.clientKey, s.clientKeyPass); err != nil {
-			return err
-		} else {
-			body.Add("grant_type", "client_credentials")
-			body.Add("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
-			body.Add("client_assertion", clientAssertion)
-		}
-	} else if s.username != "" && s.password != "" {
-		body.Add("grant_type", "password")
-		body.Add("username", s.username)
-		body.Add("password", s.password)
-		body.Set("client_id", constants.AzPowerShellClientID)
-	} else {
-		return fmt.Errorf("unable to authenticate. no valid credential provided")
-	}
-
-	if req, err := NewRequest(context.Background(), "POST", endpoint, body, nil, nil); err != nil {
-		return err
-	} else if res, err := s.send(req); err != nil {
-		return err
-	} else {
-		defer res.Body.Close()
-		s.mutex.Lock()
-		defer s.mutex.Unlock()
-		if err := json.NewDecoder(res.Body).Decode(&s.token); err != nil {
-			return err
-		} else {
-			return nil
-		}
-	}
+	return s.AuthClient.Authenticate(s.send)
 }
 
 func (s *restClient) Delete(ctx context.Context, path string, body interface{}, params query.Params, headers map[string]string) (*http.Response, error) {
@@ -232,20 +160,9 @@ func (s *restClient) Put(ctx context.Context, path string, body interface{}, par
 }
 
 func (s *restClient) Send(req *http.Request) (*http.Response, error) {
-	if s.jwt != "" {
-		if aud, err := ParseAud(s.jwt); err != nil {
-			return nil, err
-		} else if aud != s.api.String() {
-			return nil, fmt.Errorf("invalid audience")
-		}
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.jwt))
-	} else {
-		if s.token.IsExpired() {
-			if err := s.Authenticate(); err != nil {
-				return nil, err
-			}
-		}
-		req.Header.Set("Authorization", s.token.String())
+	_, err := s.AuthClient.AuthenticateRequest(req, s.send)
+	if err != nil {
+		return nil, err
 	}
 	return s.send(req)
 }
